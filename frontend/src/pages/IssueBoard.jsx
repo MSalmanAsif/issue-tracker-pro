@@ -1,6 +1,58 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { DndContext, useDraggable, useDroppable } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
 
+// --- DRAGGABLE TICKET COMPONENT ---
+const IssueCard = ({ issue }) => {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: issue.id,
+    data: { status: issue.status }
+  });
+
+  const style = transform ? {
+    transform: CSS.Translate.toString(transform),
+    zIndex: isDragging ? 50 : 1,
+    opacity: isDragging ? 0.8 : 1,
+  } : undefined;
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style} 
+      {...listeners} 
+      {...attributes}
+      className={`bg-[#1c1c1f] p-4 rounded-xl border ${isDragging ? 'border-indigo-500 shadow-2xl cursor-grabbing' : 'border-[#2d2d30] hover:border-[#4a4a52] cursor-grab'} transition-colors duration-200 shadow-lg flex flex-col gap-3 relative`}
+    >
+      <p className={`font-medium text-sm leading-relaxed ${issue.status === 'DONE' ? 'text-gray-500 line-through' : 'text-gray-200'}`}>
+        {issue.title}
+      </p>
+    </div>
+  );
+};
+
+// --- DROPPABLE COLUMN COMPONENT ---
+const Column = ({ id, title, dotColor, shadowColor, issues }) => {
+  const { isOver, setNodeRef } = useDroppable({ id });
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      className={`flex flex-col min-h-[500px] p-2 rounded-xl transition-colors duration-200 ${isOver ? 'bg-[#2d2d30]/40 ring-1 ring-[#3f3f46]' : ''}`}
+    >
+      <div className="flex items-center gap-2 mb-4 px-2">
+        <div className={`h-2 w-2 rounded-full ${dotColor} ${shadowColor}`}></div>
+        <h2 className="font-medium text-gray-400 text-sm">{title}</h2>
+        <span className="text-[#3f3f46] text-sm ml-1">{issues.length}</span>
+      </div>
+      <div className="flex flex-col gap-3">
+        {issues.map(issue => <IssueCard key={issue.id} issue={issue} />)}
+      </div>
+    </div>
+  );
+};
+
+// --- MAIN BOARD COMPONENT ---
 export default function IssueBoard() {
   const { projectId } = useParams();
   const [issues, setIssues] = useState([]);
@@ -16,14 +68,12 @@ export default function IssueBoard() {
   const handleCreateIssue = async (e) => {
     e.preventDefault();
     if (!title.trim()) return;
-
     try {
       const response = await fetch(`http://localhost:5000/api/projects/${projectId}/issues`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
       });
-
       if (response.ok) {
         const newIssue = await response.json();
         setIssues([newIssue, ...issues]);
@@ -34,117 +84,89 @@ export default function IssueBoard() {
     }
   };
 
-  // NEW: Function to update ticket status in the database and UI
-  const moveIssue = async (issueId, newStatus) => {
-    try {
-      const response = await fetch(`http://localhost:5000/api/issues/${issueId}/status`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
+  // --- DRAG AND DROP HANDLER ---
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    
+    // If dropped outside a valid column, do nothing
+    if (!over) return;
 
-      if (response.ok) {
-        // Update the local state so the ticket instantly moves on screen
-        setIssues(issues.map(issue => 
-          issue.id === issueId ? { ...issue, status: newStatus } : issue
-        ));
+    const issueId = active.id;
+    const newStatus = over.id; // 'TODO', 'IN_PROGRESS', or 'DONE'
+    const oldStatus = active.data.current.status;
+
+    // Only update if it actually moved to a new column
+    if (newStatus !== oldStatus) {
+      // Optimistically update the UI instantly for a snappy feel
+      setIssues(issues.map(issue => 
+        issue.id === issueId ? { ...issue, status: newStatus } : issue
+      ));
+
+      // Make the background API call to update the database
+      try {
+        await fetch(`http://localhost:5000/api/issues/${issueId}/status`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newStatus }),
+        });
+      } catch (error) {
+        console.error("Error updating issue in DB:", error);
       }
-    } catch (error) {
-      console.error("Error updating issue:", error);
     }
   };
 
   const getIssuesByStatus = (status) => issues.filter(issue => issue.status === status);
 
   return (
-    <div className="min-h-screen p-8 max-w-6xl mx-auto">
-      <Link to="/" className="text-blue-600 hover:underline mb-4 inline-block font-medium">
-        &larr; Back to Projects
+    <div className="min-h-screen p-8 max-w-7xl mx-auto font-sans tracking-wide">
+      <Link to="/" className="text-gray-500 hover:text-gray-300 text-sm mb-6 inline-block transition-colors">
+        &larr; Back to Workspace
       </Link>
       
-      <header className="mb-8 flex justify-between items-end">
+      <header className="mb-10 flex justify-between items-end border-b border-[#2d2d30] pb-6 px-2">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Project Board</h1>
-          <p className="text-gray-600">Managing issues for Project ID: {projectId}</p>
+          <h1 className="text-2xl font-semibold text-gray-100 tracking-tight">Board <span className="text-gray-600 font-normal ml-2">#{projectId}</span></h1>
         </div>
         
-        <form onSubmit={handleCreateIssue} className="flex gap-2">
+        <form onSubmit={handleCreateIssue} className="flex bg-[#1c1c1f] border border-[#2d2d30] rounded-lg focus-within:border-indigo-500/50 transition-colors overflow-hidden shadow-sm">
           <input 
             type="text" 
-            placeholder="What needs to be done?" 
+            placeholder="Create new issue..." 
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="border border-gray-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+            className="bg-transparent p-2 px-4 text-sm focus:outline-none text-gray-200 w-64 placeholder-gray-600"
           />
-          <button type="submit" className="bg-gray-800 text-white px-4 py-2 rounded font-semibold hover:bg-gray-900">
-            Add Ticket
+          <button type="submit" className="bg-[#2d2d30] hover:bg-[#3f3f46] text-gray-300 px-4 py-2 text-sm font-medium transition-colors border-l border-[#2d2d30]">
+            Add
           </button>
         </form>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        
-        {/* TODO Column */}
-        <div className="bg-gray-100 p-4 rounded-lg min-h-[500px]">
-          <h2 className="font-bold text-gray-700 mb-4 border-b pb-2 flex justify-between">
-            TODO <span className="bg-gray-200 text-gray-600 px-2 rounded-full text-sm">{getIssuesByStatus('TODO').length}</span>
-          </h2>
-          <div className="flex flex-col gap-3">
-            {getIssuesByStatus('TODO').map(issue => (
-              <div key={issue.id} className="bg-white p-3 rounded shadow-sm border border-gray-200 group">
-                <p className="font-medium text-gray-800 mb-3">{issue.title}</p>
-                <div className="flex justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => moveIssue(issue.id, 'IN_PROGRESS')} className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 font-medium">
-                    Start &rarr;
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* DndContext wraps our droppable columns */}
+      <DndContext onDragEnd={handleDragEnd}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Column 
+            id="TODO" 
+            title="Todo" 
+            dotColor="bg-gray-500" 
+            issues={getIssuesByStatus('TODO')} 
+          />
+          <Column 
+            id="IN_PROGRESS" 
+            title="In Progress" 
+            dotColor="bg-orange-500" 
+            shadowColor="shadow-[0_0_8px_rgba(249,115,22,0.6)]" 
+            issues={getIssuesByStatus('IN_PROGRESS')} 
+          />
+          <Column 
+            id="DONE" 
+            title="Done" 
+            dotColor="bg-indigo-500" 
+            shadowColor="shadow-[0_0_8px_rgba(99,102,241,0.6)]" 
+            issues={getIssuesByStatus('DONE')} 
+          />
         </div>
-
-        {/* IN PROGRESS Column */}
-        <div className="bg-gray-100 p-4 rounded-lg min-h-[500px]">
-          <h2 className="font-bold text-gray-700 mb-4 border-b pb-2 flex justify-between">
-            IN PROGRESS <span className="bg-gray-200 text-gray-600 px-2 rounded-full text-sm">{getIssuesByStatus('IN_PROGRESS').length}</span>
-          </h2>
-          <div className="flex flex-col gap-3">
-            {getIssuesByStatus('IN_PROGRESS').map(issue => (
-              <div key={issue.id} className="bg-white p-3 rounded shadow-sm border border-gray-200 group">
-                <p className="font-medium text-gray-800 mb-3">{issue.title}</p>
-                <div className="flex justify-between opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => moveIssue(issue.id, 'TODO')} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1">
-                    &larr; Back
-                  </button>
-                  <button onClick={() => moveIssue(issue.id, 'DONE')} className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200 font-medium">
-                    Complete &rarr;
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* DONE Column */}
-        <div className="bg-gray-100 p-4 rounded-lg min-h-[500px]">
-          <h2 className="font-bold text-gray-700 mb-4 border-b pb-2 flex justify-between">
-            DONE <span className="bg-gray-200 text-gray-600 px-2 rounded-full text-sm">{getIssuesByStatus('DONE').length}</span>
-          </h2>
-          <div className="flex flex-col gap-3">
-            {getIssuesByStatus('DONE').map(issue => (
-              <div key={issue.id} className="bg-white p-3 rounded shadow-sm border border-gray-200 group">
-                <p className="font-medium text-gray-500 line-through mb-3">{issue.title}</p>
-                <div className="flex justify-start opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => moveIssue(issue.id, 'IN_PROGRESS')} className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1">
-                    &larr; Reopen
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-      </div>
+      </DndContext>
     </div>
   );
 }
